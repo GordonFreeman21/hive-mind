@@ -2,7 +2,6 @@
 import asyncio
 import struct
 import logging
-import hashlib
 
 log = logging.getLogger("Peer")
 
