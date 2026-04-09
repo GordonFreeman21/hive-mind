@@ -1,4 +1,4 @@
-```gitignore
+
 # Python compiled files
 *.pyc
 __pycache__/
@@ -15,4 +15,3 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
-```
