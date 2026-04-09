@@ -1,18 +1,1 @@
-```gitignore
-# Python compiled files
-*.pyc
-__pycache__/
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-```
+Nothing should be ignored based on the provided file changes. The only modified file is `hive_core/peer.py`, which is a Python source file and should not be ignored. No build artifacts, dependencies, or temporary files are present in the changes.

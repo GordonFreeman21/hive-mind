@@ -63,6 +63,8 @@ class PeerConnection:
             await self._send_message(MSG_INTERESTED, b'')
             self.am_interested = True
             
+            log.info(f"⏳ Waiting for bitfield from {self.ip}...")
+            
             # Start the message listen loop
             await self._message_loop()
 
@@ -165,6 +167,8 @@ class PeerConnection:
                 msg_id = message_data[0]
                 payload = message_data[1:]
                 
+                log.debug(f"📨 Received message ID {msg_id} from {self.ip} (payload: {len(payload)} bytes)")
+                
                 await self._handle_message(msg_id, payload)
                 
             except asyncio.TimeoutError:
@@ -187,11 +191,16 @@ class PeerConnection:
             self.peer_choking = True
             
         elif msg_id == MSG_UNCHOKE:
-            log.debug(f"{self.ip} unchoked us - can request pieces")
+            log.info(f"🟢 {self.ip} unchoked us - requesting pieces!")
             self.peer_choking = False
-            # Send initial requests when unchoked
+            # Send initial requests when unchoked - even without bitfield we can request common pieces
             if self.piece_manager:
+                log.info(f"🚀 Peer unchoked! Requesting pieces from {self.ip}")
+                # Request first 10 pieces as starter (we'll refine once we get bitfield)
+                for piece_idx in range(min(10, self.torrent.total_pieces)):
+                    await self._request_blocks_for_piece(piece_idx, max_blocks=2)
                 await self._send_initial_requests()
+                await self._request_more_pieces()
                 
         elif msg_id == MSG_INTERESTED:
             log.debug(f"{self.ip} is interested in what we have")
@@ -210,6 +219,7 @@ class PeerConnection:
                 
         elif msg_id == MSG_BITFIELD:
             self.bitfield = bytearray(payload)
+            log.info(f"📋 Received BITFIELD from {self.ip} ({len(payload)} bytes)")
             # Decode bitfield to know which pieces peer has
             for i, byte in enumerate(self.bitfield):
                 for bit in range(8):
@@ -217,10 +227,14 @@ class PeerConnection:
                         piece_index = i * 8 + bit
                         if piece_index < self.torrent.total_pieces:
                             self.peer_pieces.add(piece_index)
-            log.info(f"{self.ip} has {len(self.peer_pieces)} pieces")
-            # After receiving bitfield, send initial requests if unchoked
-            if not self.peer_choking and self.piece_manager:
+            log.info(f"📋 {self.ip} has {len(self.peer_pieces)} pieces")
+            # After receiving bitfield, ALWAYS send requests (peer is usually unchoked by default)
+            if self.piece_manager:
+                # Wait a bit for peer_pieces to be populated before requesting
+                await asyncio.sleep(0.1)
+                log.info(f"🚀 Sending initial requests to {self.ip} (have {len(self.peer_pieces)} pieces)")
                 await self._send_initial_requests()
+                await self._request_more_pieces()
             
         elif msg_id == MSG_REQUEST:
             # INCOMING REQUEST FROM PEER - IGNORE (seeding disabled!)
@@ -238,6 +252,8 @@ class PeerConnection:
                 
                 if self.piece_manager:
                     await self.piece_manager.add_block(piece_index, block_offset, block_data)
+                    # Request more pieces after receiving a block (keep the pipeline full)
+                    await self._request_more_pieces()
                     
         elif msg_id == MSG_CANCEL:
             log.debug(f"{self.ip} cancelled a request")
@@ -252,18 +268,49 @@ class PeerConnection:
             self.piece_manager.get_needed_pieces()
         )
         
+        log.info(f"📤 Found {len(needed_pieces)} needed pieces from {self.ip} (peer has {len(self.peer_pieces)}, we need {len(self.piece_manager.get_needed_pieces())})")
+        
         if not needed_pieces:
+            # If peer has no pieces we need, try requesting anyway in case bitfield wasn't fully parsed
+            if len(self.peer_pieces) > 0:
+                log.warning(f"⚠️  No overlap in pieces - trying first 5 pieces from peer")
+                for piece_idx in list(self.peer_pieces)[:5]:
+                    await self._request_blocks_for_piece(piece_idx, max_blocks=3)
+            else:
+                log.warning(f"⚠️  Peer has no pieces reported")
             return
             
         # Request blocks from available pieces (limit concurrent requests)
         for piece_idx in list(needed_pieces)[:5]:  # Max 5 pieces at a time
-            piece_length = self.torrent.piece_length
-            num_blocks = (piece_length // 16384) + (1 if piece_length % 16384 else 0)
+            log.debug(f"Requesting piece {piece_idx} from {self.ip}")
+            await self._request_blocks_for_piece(piece_idx, max_blocks=3)
+
+    async def _request_more_pieces(self):
+        """Request more pieces to keep the download pipeline full."""
+        if not self.piece_manager or self.peer_choking:
+            return
             
-            for block_num in range(min(num_blocks, 3)):  # 3 blocks per piece
-                offset = block_num * 16384
-                length = min(16384, piece_length - offset)
-                await self._request_piece(piece_idx, offset, length)
+        # Get pieces this peer has that we need
+        needed_pieces = self.peer_pieces.intersection(
+            self.piece_manager.get_needed_pieces()
+        )
+        
+        if not needed_pieces:
+            return
+            
+        # Request one more piece to keep pipeline full
+        for piece_idx in list(needed_pieces)[:1]:
+            await self._request_blocks_for_piece(piece_idx, max_blocks=2)
+
+    async def _request_blocks_for_piece(self, piece_idx, max_blocks=3):
+        """Request multiple blocks for a specific piece."""
+        piece_length = self.torrent.piece_length
+        num_blocks = (piece_length // 16384) + (1 if piece_length % 16384 else 0)
+        
+        for block_num in range(min(num_blocks, max_blocks)):
+            offset = block_num * 16384
+            length = min(16384, piece_length - offset)
+            await self._request_piece(piece_idx, offset, length)
 
     async def close(self):
         self.running = False
