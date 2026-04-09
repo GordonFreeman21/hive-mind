@@ -32,8 +32,8 @@ async def download_monitor(piece_manager, timeout=60):
         await asyncio.sleep(2)
         stats = piece_manager.get_download_progress()
         
+        elapsed = asyncio.get_event_loop().time() - start_time
         if stats != last_stats:
-            elapsed = asyncio.get_event_loop().time() - start_time
             speed = stats['bytes_downloaded'] / elapsed if elapsed > 0 else 0
             print(f"\r📊 Progress: {stats['pieces_completed']}/{stats['total_pieces']} pieces "
                   f"({stats['percent_complete']:.1f}%) | "
