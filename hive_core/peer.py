@@ -64,6 +64,7 @@ class PeerConnection:
             
             log.info(f"⏳ Waiting for bitfield from {self.ip}...")
             
+
             # Start the message listen loop
             await self._message_loop()
 
@@ -280,8 +281,7 @@ class PeerConnection:
             return
             
         # Request blocks from available pieces (limit concurrent requests)
-        for piece_idx in list(needed_pieces)[:5]:  # Max 5 pieces at a time
-            log.debug(f"Requesting piece {piece_idx} from {self.ip}")
+        for piece_idx in list(needed_pieces)[:5]:  # Max 5 pieces at a time            log.debug(f"Requesting piece {piece_idx} from {self.ip}")
             await self._request_blocks_for_piece(piece_idx, max_blocks=3)
 
     async def _request_more_pieces(self):
